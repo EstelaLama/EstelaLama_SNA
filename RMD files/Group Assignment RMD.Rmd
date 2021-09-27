@@ -1,0 +1,542 @@
+---
+title: "Group Assignment"
+subtitle: 'Global corporate directors (2016)'
+author: "Group 2.2"
+date: "26/2/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+### General information 
+
+We are working with a bipartite network of 9,582 board directors and 4,453 companies on whose boards they sit, spanning 47 countries worldwide, constructed from data collected by the Financial Times (c. Sept. 2016). 32% of the companies are based in the United States, followed by Canada 9.3%, UK 5.7%, Japan 5.7%. There are 39 different Industries, covering 6.2% Financial Services, 6.3% Pharmaceuticals, and 5.7% Mining.
+
+### Fields and description: 
+
+Director nodes are annotated with age and gender. Company nodes are annotated with their country, sector, industry, and number of employees.
+
+
+### Objective
+
+Social networking plays a critical role in the appointment to a board because you can have an informed debate where women are directors. One way to quantify the network is by studying the links created by serving on the same board and by joint appointments on multiple boards. We analyze a network of 9,582 board members of 4,453 companies and 39 different industries traded on stock exchanges worldwide. 
+
+
+```{r loading-data, warning=FALSE, message=FALSE}
+#Loading Packages
+library('igraph')
+library("dplyr")
+library("cowplot")
+library("knitr")
+
+#Loading Data and building graph
+g <- read_graph("directors.gml", "gml")
+
+# Create table with attribute information 
+info_df <- data.frame(id = V(g)$id, type = V(g)$type, age = V(g)$age, gender = V(g)$gender, country = V(g)$country, sector = V(g)$sector, industry = V(g)$industry, employeesnum = V(g)$employeesnum)
+info_dir_df<-info_df[info_df$type==FALSE,c("id","age","gender")]
+info_comp_df<-info_df[info_df$type==TRUE,c("id","country","sector","industry","employeesnum")]
+
+#Create name attribute for future transformations
+V(g)$name <- V(g)$id
+
+# Create Edges data frame
+edge_df <- as.data.frame(get.edgelist(g))
+
+# Fill edge data frame with director's and company's information
+edge_df<-rename(edge_df, c(person = V1, company = V2))
+edge_df <- (merge(edge_df, info_dir_df, by.x = "person", by.y = "id"))
+edge_df <- (merge(edge_df, info_comp_df, by.x = "company", by.y = "id"))
+
+#Calculate # of industries, # of countries and # of boards where directors participate
+summ_dir_df <-edge_df %>%
+  group_by(person)%>%
+  summarise(n_ind = n_distinct(industry),
+            n_ctry = n_distinct(country),
+            n_boards = length(industry))
+
+#Merge previous calculations with director's informaption table
+info_dir_df <- (merge(info_dir_df, summ_dir_df, by.x = "id", by.y = "person"))
+
+#Calculate # of directors a company has and their male/female proportion
+summ_comp_df <-edge_df %>%
+  group_by(company)%>%
+  summarise(n_dir = length(industry),
+            n_males = sum(gender == "Male"),
+            n_females = sum(gender == "Female"))
+
+info_comp_df <- (merge(info_comp_df, summ_comp_df, by.x = "id", by.y = "company"))
+
+info_comp_df["pcg_females"]<-info_comp_df["n_females"]/info_comp_df["n_dir"]
+
+kable(summary(info_dir_df[,c("age","n_boards","n_ind","n_ctry")]))
+```
+
+On average, a director serves on 1.4 boards of companies in 1.3 industries of 1.06 countries.
+
+```{r comp_summary}
+kable(summary(info_comp_df[,c("n_dir","n_males","n_females","pcg_females")]))
+```
+
+On average, a company has 3 board members of which 14% are women.
+
+#### **Bipartite Graph**
+
+As told in the introduction, we are dealing with a bipartite graph.
+
+```{r figSvg,eval=TRUE,echo=FALSE,message=FALSE, error=FALSE, warning=FALSE,fig.height=10}
+
+fig_svg<-cowplot::ggdraw()+cowplot::draw_image("sub_bipartite.svg")
+plot(fig_svg)
+```
+
+Now, we need to make sure that it is eligible to project into a directors and a companies graph `bipartite_mapping(g)$res` = `r bipartite_mapping(g)$res`.
+
+
+```{r projections , warning=FALSE, message=FALSE}
+
+V(g)$type<-bipartite_mapping(g)$type
+
+proj<-bipartite_projection(g, multiplicity=TRUE)
+p_g <- proj$proj1 #board members
+c_g <- proj$proj2 #companies
+
+```
+
+After projecting the graph we are able to analyze the directors graphs and companies graphs by themselves.
+
+#### **Directors Projected Graph:**
+```{r directors_img,eval=TRUE,echo=FALSE,message=FALSE, error=FALSE, warning=FALSE,fig.height=10}
+
+fig_svg<-cowplot::ggdraw()+cowplot::draw_image("p_g.svg")
+plot(fig_svg)
+```
+
+
+#### **Companies Projected Graph:**
+
+```{r companies_img,eval=TRUE,echo=FALSE,message=FALSE, error=FALSE, warning=FALSE,fig.height=10}
+
+fig_svg<-cowplot::ggdraw()+cowplot::draw_image("c_g.svg")
+plot(fig_svg)
+```
+
+
+### **Network Characteristics**
+
+#### **Size**
+
+```{r size, warning=FALSE, message=FALSE}
+
+### 1.Number of edges in the network ( size of the graph) ####
+number_edges_company <- gsize(c_g)
+
+number_edges_people <- gsize(p_g)
+
+### 2. Number of vertices in the network ( size of the graph) ####
+number_nodes_people<- gorder(c_g)
+
+number_nodes_company<- gorder(p_g)
+
+kable(data.frame(Data = c("Edges", "Vertices"), 
+                       Company_table = c(number_edges_company,number_nodes_people),
+                       People_table = c(number_edges_people,number_nodes_company)))
+
+
+```
+
+As expected, the director's graph is bigger than the company's one because several people can serve on the board of one company. 
+
+#### **Degree Distribution** (Frecuency and Cumulative)
+
+```{r Degree_Distribution}
+
+distribution_company<-hist(degree(c_g), col="lightblue", xlab="Company Degree", ylab="Frequency", main="Company Degree Distribution")
+
+distribution_person<-hist(degree(p_g), col="#3366FF", xlab="Board Member Degree", ylab="Frequency", main="Board Member Degree Distribution")
+
+#Overlay Distribution Graph
+plot(density(degree(c_g)), main="Degree distribution", xlab = "Node Degree",  ylab = "Density", col = '#009900',type = "l", xlim =c(0,80))
+lines(density(degree(p_g)), col = '#0000FF',type = "l")
+legend("topright",legend = c("Companies", "Board Members"), col=c('#009900','#0000FF'),lty=1)
+
+```
+
+Both degree distributions are skewed to the right, meaning that the mean degree centrality is greater than the median or the mode. This shape indicates that there are several data points, perhaps outliers, that are greater than the mode. 
+Companies are more Leptokurtic, meaning there are more companies with fewer degrees in the distribution tails and more values close to the mean. Board Members are more latykurtic, meaning it has fewer degrees in the tails and fewer values close to the mean, it has more dispersed degrees.
+
+
+#### **Max-Min degree**
+
+```{r max_min, warning=FALSE, message=FALSE}
+
+### 4. Max degree ####
+max_degre_company<-max(degree(c_g))
+
+max_degre_people<-max(degree(p_g))
+
+### 5. Min degree ####
+min_degre_company<-min(degree(c_g))
+
+min_degre_people<-min(degree(p_g))
+
+kable(data.frame(Data = c("Max degree", "Min degree"), 
+                       Company_table = c(max_degre_company,min_degre_company),
+                       People_table = c(max_degre_people,min_degre_people)))
+```
+
+Companies with zero degrees mean they do not share anything with other companies in the network. People with zero degrees is that they sit on boards with other people that are not in the network. 
+The maximum degree for companies means, that 23 companies share board members in the network and 79 people are part of the boards of other companies in the network. 
+
+
+#### **Graph Diameter**
+
+```{r Diameter}
+diameter_company <- diameter(graph = c_g, directed = F)
+
+diameter_people <- diameter(graph = p_g, directed = F)
+
+kable(data.frame(Data = c("Diameter"), 
+                       Company_table = c(diameter_company),
+                       People_table = c(diameter_people)))
+```
+
+The diameter of a network is the longest of all the calculated shortest paths in a network. It is the shortest distance between the two most distant nodes in the network. In other words, the diameter is the longest of all the calculated path lengths. 20 and 21 are representative of the linear size of a network. 
+
+
+#### **Path Length**
+
+```{r Path length}
+
+avg_path_company <- average.path.length(graph = c_g, directed = F)
+
+avg_path_people <- average.path.length(graph = p_g, directed = F)
+
+kable(data.frame(Data = c("Diameter"), 
+                       Company_table = c(avg_path_company),
+                       People_table = c(avg_path_people)))
+
+```
+
+The average path length for both companies and board members is pretty similar. On average, you have to pass by ~8 companies/people to get to strangers. 
+
+
+#### **Transitivity**
+
+```{r network_descriptives, warning=FALSE, message=FALSE}
+
+trasnsitivity_company<- transitivity(c_g)
+
+trasnsitivity_people<- transitivity(p_g)
+
+kable(data.frame(Data = c("Transitivity"), 
+                       Company_table = c(trasnsitivity_company),
+                       People_table = c(trasnsitivity_people)))
+```
+
+Transitivity is the overall probability for the network to have adjacent nodes interconnected, thus revealing the existence of tightly connected communities (or clusters, subgroups, cliques). Directors are 93% more likely to be connected in triples close to form triangles, compared to companies with 52% probability. This makes more sense because more board members are connected to others than companies to each other. 
+
+
+#### **Network cohesion**
+
+Companies graph:
+
+As expected is not fully connected: `is.connected(c_g)` = `r is.connected(c_g)` 
+
+```{r company_cohesion, warning=FALSE, message=FALSE}
+
+comps <- decompose.graph(c_g)
+comp_coh<-as.integer(names(tail(table(sapply(comps, vcount)),1)))/gorder(c_g)*100
+
+```
+
+**`r comp_coh`%** of the network is connected in a single group.
+
+Directors graph:
+
+As expected is not fully connected: `is.connected(p_g)` = `r is.connected(p_g)` 
+
+```{r directors_cohesion, warning=FALSE, message=FALSE}
+
+comps <- decompose.graph(p_g)
+dir_coh<-as.integer(names(tail(table(sapply(comps, vcount)),1)))/gorder(p_g)*100
+
+```
+
+**`r dir_coh`%** of the network is connected in a single group.
+
+
+Both companies and directors are ~34% a cohesive group. For directors, 33.7% group of people are part of the same clique. For companies, 34.3% group of the companies where they are connected directly to others. 
+
+
+### **Centrality Measures**
+
+
+#### **Degree Centrality**
+
+```{r degree, warning=FALSE, message=FALSE}
+
+# Centrality Degree
+degree_company <- data.frame(degree = degree(graph = c_g ))
+info_comp_df <- (merge(info_comp_df, degree_company, by.x = "id", by.y = "row.names"))
+
+degree_people <- data.frame(degree = degree(graph = p_g ))
+info_dir_df <- (merge(info_dir_df, degree_people, by.x = "id", by.y = "row.names"))
+
+# Company with the highest degree centrality
+kable(head(info_comp_df[order(info_comp_df$degree,decreasing = T),],10))
+
+# Person with the highest degree centrality
+kable(head(info_dir_df[order(info_dir_df$degree,decreasing = T),],10))
+
+```
+
+Degree centrality is defined as the number of links incident upon a node. The company with the highest degree of centrality is a company in Mexico in the Industrials sector with 81,380 employees and 15 directors. An observation of the largest degree of centrality is that out of the 15 board members, non are women. Most companies in the top 10 degrees (23-17) are large companies with many directors on their board. 
+The most influential director in this network a is 67-year-old male sitting on 5 boards in 5 different industries in the same country. The other a bit less influential are younger and sit on fewer boards in fewer industries. It's also important to note that the topmost influential people are males. 
+
+
+#### **Betweenness Centrality**
+
+```{r Betweeness, warning=FALSE, message=FALSE}
+
+btn_company <- data.frame(betweenness = betweenness(graph = c_g ))
+info_comp_df <- (merge(info_comp_df, btn_company, by.x = "id", by.y = "row.names"))
+
+btn_people <- data.frame(betweenness = betweenness(graph = p_g ))
+info_dir_df <- (merge(info_dir_df, btn_people, by.x = "id", by.y = "row.names"))
+
+# Company with the highest degree Betweenes (btw)
+kable(head(info_comp_df[order(info_comp_df$betweenness,decreasing = T),],10))
+
+# Person with the highest degree Betweenes (btw)
+kable(head(info_dir_df[order(info_dir_df$betweenness,decreasing = T),],10))
+
+```
+The company with the highest betweenness centrality is an industrial engineering company in the US. It's a large company with 135,00 employees and 18 directors on its board. (they only have 2 female board members, which is 11.11%). This company acts as a bridge along the shortest path between other nodes 153,993.42 times. Companies with the higher betweenness centrality have the most influence because more information passes through them. It makes sense they are large companies with many directors on their board. 9/10 companies are in the US and there is only one in France. 
+
+The director with the highest betweenness centrality is a 66-year-old male sitting on four different boards in four different industries, it makes sense that he is a bridge between other directors. Directors with the higher betweenness centralities have a greater measure of control with communication between other directors. It makes sense that they all work with different boards, industries, and countries. There is only one female among the top ten most influential directors.  
+
+
+
+#### **Closeness Centrality**
+
+```{r closeness, warning=FALSE, message=FALSE}
+
+cl_company <- data.frame(closeness = closeness(graph = c_g ))
+info_comp_df <- (merge(info_comp_df, cl_company, by.x = "id", by.y = "row.names"))
+
+cl_people <- data.frame(closeness = closeness(graph = p_g ))
+info_dir_df <- (merge(info_dir_df, cl_people, by.x = "id", by.y = "row.names"))
+
+# Company with the highest degree Closeness (cl)
+kable(head(info_comp_df[order(info_comp_df$closeness,decreasing = T),],10))
+
+# People with the highest degree Closeness (cl)
+kable(head(info_dir_df[order(info_dir_df$closeness,decreasing = T),],10))
+
+```
+The top companies and directors have similar closeness centrality measures. This measures how fast the flow of information goes through the network. The top companies are more diverse, 7/10 have more female representation than the average 14% in the network. Top directos with closeness centrality are more diverse as well, because they combine different industries and countries. 
+
+
+
+#### **Edge Centrality (Betweeness)**
+
+**Companies graph**
+```{r Edge_Centrality_comp, warning=FALSE, message=FALSE}
+#Company edges
+V(c_g)$name <- V(c_g)$id
+
+eb <- edge.betweenness(c_g)
+E(c_g)[order(eb, decreasing=T)[1:2]]
+
+kable(info_comp_df[info_comp_df$id %in% c(322089,322763),])
+kable(info_comp_df[info_comp_df$id %in% c(326210,326698),])
+
+```
+
+The two most relevant edges link two companies both in the United States. The second pair is a relatively smaller company than the first pair. The larger company pair only has two female directors on their board, but the smaller at least have 20% representation.
+
+
+**Directors graph**
+```{r Edge_Centrality_dir, warning=FALSE, message=FALSE}
+
+#Directors edges
+V(p_g)$name <- V(p_g)$id
+
+eb <- edge.betweenness(p_g)
+E(p_g)[order(eb, decreasing=T)[1:2]]
+
+kable(info_dir_df[info_dir_df$id %in% c(16309,18486),])
+kable(info_dir_df[info_dir_df$id %in% c(458,1703),])
+```
+
+The two most relevant edges link two male directors with a relatively high number of industries and a high degree. 
+
+### **Community Detection**
+
+Communities were created using Louvain algorithm.
+
+#### **Companies communities**
+```{r comm_detection_comp}
+# Community Detection using Louvain algorithm
+#Apply Algorithm
+lc <- cluster_louvain(c_g)
+
+#Extract Communities and save them in an attribute
+memb <- membership(lc)
+V(c_g)$community <- memb
+
+#Create Data frame with communities and id
+
+comm_df <- data.frame(id = names(memb), community = V(c_g)$community)
+
+#Merge new data frame with 
+
+info_comp_df <- (merge(info_comp_df, comm_df, by = "id"))
+
+
+#Display companies table with the community they belong
+kable(head(info_comp_df[order(info_comp_df$community,decreasing = F),],10))
+```
+
+`r length(lc)` communities were created with the following distribution
+
+```{r community_companies_distribution}
+
+plot(density(sizes(lc)), main="Companies Community distribution", xlab = "# of members in community", ylab = "% of communities", col = 'skyblue',type = "l")
+
+```
+
+Most of the companies' communities (60%) have less than 10 members, which explains why there were so many communities created. Most companies in the communities are in Asia and are relatively smaller companies. The largest community contains 120 companies. 
+
+
+#### **Directors communities**
+```{r comm_detection_dir}
+# Community Detection using Louvain algorithm
+#Apply Algorithm
+lc <- cluster_louvain(p_g)
+
+#Extract Communities and save them in an attribute
+memb <- membership(lc)
+V(p_g)$community <- memb
+
+#Create Data frame with communities and id
+
+comm_df <- data.frame(id = names(memb), community = V(p_g)$community)
+
+#Merge new data frame with 
+
+info_dir_df <- (merge(info_dir_df, comm_df, by = "id"))
+
+
+#Display actors key table with the community they belong
+kable(head(info_dir_df[order(info_dir_df$community,decreasing = F),],10))
+```
+
+`r length(lc)` communities were created with the following distribution
+
+```{r community_directors_distribution}
+
+plot(density(sizes(lc)), main="Directors Community distribution", xlab = "# of members in community", ylab = "% of communities", col = 'skyblue',type = "l")
+
+```
+
+Likewise, the director's community's distribution is right-skewed. The vast majority of communities have 20 or fewer members. Community number two, looks like a very diverse group of directors. 
+
+
+
+#### **Information Diffusion**
+
+To understand the information diffusion within each graph, we are going to test how long does it take for a message contained in 5 vertices to reach 1,000 nodes. In this example, the probability of transmission is 12% daily.
+
+```{r Information_Diffusion_function}
+info_diffussion = function(g, graph_title){
+  
+#Source: Cheng-Jun Wang, Nanjing University
+  
+  node_number = 1000
+  seeds_num = 5
+  set.seed(568);diffusers = sample(V(g),seeds_num)
+  infected =list()
+  infected[[1]]= diffusers
+  
+  # for example, set percolation probability 
+  transmission_rate = 0.12
+  coins = c(1, 0) 
+  probabilities = c(transmission_rate, 1-transmission_rate )         
+  # sample(coins, 1, rep=TRUE, prob=probabilities) # Generate a sequence
+  # toss the coins
+  toss = function(freq) {
+    tossing = NULL
+    for (i in 1:freq ) tossing[i] = sample(coins, 1, rep=TRUE, prob=probabilities)
+    tossing = sum(tossing)
+    return (tossing)
+  }
+  
+  update_diffusers = function(diffusers){
+    nearest_neighbors = data.frame(table(unlist(neighborhood(g, 1, diffusers))));
+    nearest_neighbors = subset(nearest_neighbors, !(nearest_neighbors[,1]%in%diffusers))
+    keep = unlist(lapply(nearest_neighbors[,2], toss))
+    new_infected = as.numeric(as.character(nearest_neighbors[,1][keep >= 1]))
+    class(new_infected) <- "igraph.vs"
+    diffusers = unique(c(diffusers, new_infected))
+    return(diffusers)
+  }
+  
+  total_time = 1
+  while(length(infected[[total_time]]) < node_number){ 
+    infected[[total_time+1]] = sort(update_diffusers(infected[[total_time]]))
+    #cat(length(infected[[total_time+1]]), "-->")
+    total_time = total_time + 1
+    #print(total_time)
+  }
+  
+  
+  plot_time_series = function(infected, m){
+    num_cum = unlist(lapply(1:m, 
+                            function(x) length(infected[[x]]) ))
+    p_cum = num_cum/node_number
+    p = diff(c(0, p_cum))
+    time = 1:m
+    plot(p_cum~time, type = "o", col ="skyblue", 
+         ylab = "CDF", xlab = "Time",
+         xlim = c(0,total_time), #ylim =c(0,1),
+         main = graph_title)
+  }
+  
+  plot_time_series(infected, length(infected))
+
+}
+```
+
+```{r Information_Diffusion_Companies, warning=FALSE,}
+info_diffussion(c_g, "Companies Information Diffusion")
+
+```
+
+It takes around 35 days for the message that started with 5 companies to reach 1,000 companies. 
+
+```{r Information_Diffusion_Directors, warning=FALSE,}
+info_diffussion(p_g, "Directors Information Diffusion")
+```
+
+Unsurprisingly, the director's graph seems to have a bigger information diffusion ratio as the message carried by 5 directors reached 1,000  directors in 23 days.
+
+
+## **Conclusion**
+
+Directors have high betweenness centralities which means they have a great measure of control with communication between other directors. Cliques are not as strong in this network but Directors have high betweenness centralities which means they have a great measure of control with communication between other directors. Women only have 14% of all seats, but they are not marginalized. In the top degree centrality, companies have a higher percentage of females on their board than the average female representation in the network. In betweenness and closeness centrality, 70% of companies have a higher representation of women as well. 
+
+
+
+
+#### **Source**
+
+A. Evtushenko and M. T. Gastner, Beyond Fortune 500: Women in a global network of directors. In H. Cherifi et al. (Eds.), Complex Networks and Their Applications VIII, Proc. 8th Int. Conf. Complex Networks and Their Applications, Volume 1, pp. 586-598 (Springer, Cham, 2020), DOI: 10.1007/978-3-030-36683-4_47. M. T. G. was supported by the Singapore Ministry of Education and a Yale-NUS College start-up grant (R-607-263-043-121).
+
+
+
